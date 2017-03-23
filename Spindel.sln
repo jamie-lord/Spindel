@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
 VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Araneae", "Araneae.csproj", "{B885B1CF-2D52-4C77-8B9E-77B5E67F296A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spindel", "Spindel.csproj", "{B885B1CF-2D52-4C77-8B9E-77B5E67F296A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
