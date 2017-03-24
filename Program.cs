@@ -2,44 +2,42 @@
 using RaptorDB;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Net;
-using System.Runtime.Serialization.Formatters.Binary;
 
 namespace Spindel
 {
     public class Program
     {
-        private static RaptorDB<string> db;
+        private static RaptorDB<Guid> urlDb;
+        private static RaptorDB<Guid> relationshipDb;
 
         public static void Main(string[] args)
         {
-            db = RaptorDB<string>.Open(@"./test", false);
+            urlDb = RaptorDB<Guid>.Open(@"./urlDb", false);
+            relationshipDb = RaptorDB<Guid>.Open(@"./relationshipDb", true);
 
             Global.SaveTimerSeconds = 5;
 
             var rootPage = new Page("https://www.theguardian.com/uk");
-            rootPage.GetChildren();
-            db.Set(rootPage.Url, SerializeToByteArray(rootPage.Children));
+            //rootPage.GetChildren();
+            //urlDb.Set(rootPage.Url, SerializeToByteArray(rootPage.Children));
 
-            db.Shutdown();
+            urlDb.Shutdown();
         }
 
-        private static byte[] SerializeToByteArray(List<Page> obj)
+        private static Guid GetUnusedGuid()
         {
-            var binFormatter = new BinaryFormatter();
-            var mStream = new MemoryStream();
-            binFormatter.Serialize(mStream, obj);
-            return mStream.ToArray();
-        }
-
-        private static List<Page> DeserializeFromByteArray(byte[] array)
-        {
-            var mStream = new MemoryStream();
-            var binFormatter = new BinaryFormatter();
-            mStream.Write(array, 0, array.Length);
-            mStream.Position = 0;
-            return binFormatter.Deserialize(mStream) as List<Page>;
+            Guid? result = null;
+            string n;
+            while (result == null)
+            {
+                var t = Guid.NewGuid();
+                if (urlDb.Get(t, out n))
+                {
+                    result = t;
+                }
+            }
+            return result.Value;
         }
     }
 
@@ -58,28 +56,16 @@ namespace Spindel
         }
 
         public string Url { get; set; }
-        public List<Page> Children { get; set; }
 
-        public void GetChildren()
+        private List<string> GetLinks()
         {
-            if (Url != null)
+            if (Url == null)
             {
-                if (Children == null)
-                {
-                    Children = new List<Page>();
-                }
-                foreach (var link in GetHtml(Url))
-                {
-                    Children.Add(new Page(link));
-                }
+                return null;
             }
-        }
-
-        private static List<string> GetHtml(string url)
-        {
             HtmlDocument htmlDoc = new HtmlDocument();
             htmlDoc.OptionFixNestedTags = true;
-            HttpWebRequest request = WebRequest.Create(url) as HttpWebRequest;
+            HttpWebRequest request = WebRequest.Create(Url) as HttpWebRequest;
             request.Method = "GET";
             request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
             request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
