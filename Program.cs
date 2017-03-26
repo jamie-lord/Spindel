@@ -2,26 +2,170 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.IO;
+using System.Linq;
 
 namespace Spindel
 {
     public class Program
     {
-		private const string URLS = @"./urls";
-		private const string RELATIONSHIPS = @"./relationships";
+		private const string URLS = @"./urls.txt";
+		private const string RELATIONSHIPS = @"./relationships.txt";
 
         public static void Main(string[] args)
         {
+			File.AppendText(URLS).Dispose();
+			File.AppendText(RELATIONSHIPS).Dispose();
 			var parent = new Page("https://www.theguardian.com/uk");
-			BinaryRage.DB.Insert(parent.Key, parent.Url, URLS);
+			parent.Id = GetExistingOrNewUrlId(parent.Url);
+			InsertPage(parent);
 			parent.GetChildUrls();
 			foreach (var c in parent.ChildUrls)
 			{
 				var child = new Page(c);
-				BinaryRage.DB.Insert(child.Key, child.Url, URLS);
-				BinaryRage.DB.Insert(parent.Key, child.Key, RELATIONSHIPS);
+				child.Id = GetExistingOrNewUrlId(child.Url);
+				InsertPage(child);
+				InsertRelationship(parent, child);
 			}
         }
+
+		private static void InsertPage(Page page)
+		{
+			var line = page.Id.ToString() + "#" + page.Url;
+			using (var writer = new StreamWriter(URLS, true))
+			{
+				writer.WriteLine(line);
+			}
+		}
+
+		private static void InsertRelationship(Page parent, Page child)
+		{
+			if (!DoesRelationshipExist(parent.Id, child.Id))
+			{
+				var line = parent.Id.ToString() + "#" + child.Id.ToString();
+				using (var writer = new StreamWriter(RELATIONSHIPS, true))
+				{
+					writer.WriteLine(line);
+				}
+			}
+		}
+
+		private static Page DecodeLine(string line)
+		{
+			try
+			{
+				var page = new Page();
+				page.Id = int.Parse(line.Split('#')[0]);
+				page.Url = line.Split('#')[1];
+				return page;
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+		private static Page GetPage(int id)
+		{
+			var lines = File.ReadLines(URLS).Where(l => l.StartsWith(id.ToString() + "#", StringComparison.Ordinal));
+			int count = 0;
+			string line = "";
+			foreach (var l in lines)
+			{
+				line = l;
+				count++;
+			}
+			if (count == 1)
+			{
+				return DecodeLine(line);
+			}
+			else if (count == 0)
+			{
+				throw new Exception(string.Format("No line with ID {0} was found.", id.ToString()));
+			}
+			else
+			{
+				throw new Exception(string.Format("More than one line with ID {0} was found.", id.ToString()));
+			}
+		}
+
+		private static Page GetPage(string url)
+		{
+			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
+			int count = 0;
+			string line = "";
+			foreach (var l in lines)
+			{
+				line = l;
+				count++;
+			}
+			if (count == 1)
+			{
+				return DecodeLine(line);
+			}
+			else if (count == 0)
+			{
+				return null;
+			}
+			else
+			{
+				throw new Exception(string.Format("More than one matching URL {0} was found.", url));
+			}
+		}
+
+		private static int GetExistingOrNewUrlId(string url)
+		{
+			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
+			int count = 0;
+			string line = "";
+			foreach (var l in lines)
+			{
+				line = l;
+				count++;
+			}
+			if (count == 1)
+			{
+				return DecodeLine(line).Id;
+			}
+			else if (count == 0)
+			{
+				try
+				{
+					string lastLine = File.ReadLines(URLS).Last();
+					return int.Parse(lastLine.Split('#')[0]) + 1;
+				}
+				catch
+				{
+					return 0;
+				}
+			}
+			else
+			{
+				throw new Exception(string.Format("More than one matching URL {0} was found.", url));
+			}
+		}
+
+		private static bool DoesRelationshipExist(int parentId, int childId)
+		{
+			var lines = File.ReadLines(RELATIONSHIPS).Where(l => l.Split('#')[0] == parentId.ToString() && l.Split('#')[1] == childId.ToString());
+			int count = 0;
+			foreach (var l in lines)
+			{
+				count++;
+			}
+			if (count == 0)
+			{
+				return false;
+			}
+			else if (count == 1)
+			{
+				return true;
+			}
+			else
+			{
+				throw new Exception(string.Format("More than one relationship was found between {0} and {1}.", parentId.ToString(), childId.ToString()));
+			}
+		}
 
 		public class Page
 		{
@@ -36,23 +180,7 @@ namespace Spindel
 
 			public string Url { get; set; }
 
-			private string _key;
-			public string Key
-			{
-				get
-				{
-					if (_key == null)
-					{
-						_key = BinaryRage.Key.GenerateUniqueKey();
-					}
-					return _key;
-				}
-
-				set
-				{
-						_key = value;
-				}
-			}
+			public int Id { get; set; }
 
 			private List<string> _childUrls;
 			public List<string> ChildUrls
@@ -94,7 +222,11 @@ namespace Spindel
 					{
 						if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
 						{
-							links.Add(link);
+							// Ensure links to this page aren't regestered as child links
+							if (link != Url)
+							{
+								links.Add(link);
+							}
 						}
 					}
 				}
