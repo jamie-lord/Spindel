@@ -16,18 +16,35 @@ namespace Spindel
         {
 			File.AppendText(URLS).Dispose();
 			File.AppendText(RELATIONSHIPS).Dispose();
-			var parent = new Page("https://www.theguardian.com/uk");
-			parent.Id = GetExistingOrNewUrlId(parent.Url);
-			InsertPage(parent);
-			parent.GetChildUrls();
-			foreach (var c in parent.ChildUrls)
+			var root = new Page("https://www.theguardian.com/uk");
+			ProcessPage(root);
+
+			var arePagesLeft = true;
+			while (arePagesLeft)
+			{
+				var nextParent = NextPageToCrawl();
+				if (nextParent == null)
+				{
+					arePagesLeft = false;
+					continue;
+				}
+				ProcessPage(nextParent);
+			}
+        }
+
+		private static void ProcessPage(Page page)
+		{
+			page.Id = GetExistingOrNewUrlId(page.Url);
+			InsertPage(page);
+			page.GetChildUrls();
+			foreach (var c in page.ChildUrls)
 			{
 				var child = new Page(c);
 				child.Id = GetExistingOrNewUrlId(child.Url);
 				InsertPage(child);
-				InsertRelationship(parent, child);
+				InsertRelationship(page, child);
 			}
-        }
+		}
 
 		private static void InsertPage(Page page)
 		{
@@ -183,7 +200,7 @@ namespace Spindel
 			}
 		}
 
-		private Page NextPageToCrawl()
+		private static Page NextPageToCrawl()
 		{
 			var urls = File.ReadLines(URLS);
 			foreach (var urlLine in urls)
