@@ -31,10 +31,13 @@ namespace Spindel
 
 		private static void InsertPage(Page page)
 		{
-			var line = page.Id.ToString() + "#" + page.Url;
-			using (var writer = new StreamWriter(URLS, true))
+			if (GetExistingUrlId(page.Url) == null)
 			{
-				writer.WriteLine(line);
+				var line = page.Id.ToString() + "#" + page.Url;
+				using (var writer = new StreamWriter(URLS, true))
+				{
+					writer.WriteLine(line);
+				}
 			}
 		}
 
@@ -115,19 +118,8 @@ namespace Spindel
 
 		private static int GetExistingOrNewUrlId(string url)
 		{
-			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
-			int count = 0;
-			string line = "";
-			foreach (var l in lines)
-			{
-				line = l;
-				count++;
-			}
-			if (count == 1)
-			{
-				return DecodeLine(line).Id;
-			}
-			else if (count == 0)
+			var id = GetExistingUrlId(url);
+			if (id == null)
 			{
 				try
 				{
@@ -138,6 +130,30 @@ namespace Spindel
 				{
 					return 0;
 				}
+			}
+			else
+			{
+				return id.Value;
+			}
+		}
+
+		private static int? GetExistingUrlId(string url)
+		{
+			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
+			int count = 0;
+			int? id = null;
+			foreach (var l in lines)
+			{
+				id = int.Parse(l.Split('#')[0]);
+				count++;
+			}
+			if (count == 0)
+			{
+				return null;
+			}
+			else if (count == 1)
+			{
+				return id;
 			}
 			else
 			{
@@ -165,6 +181,24 @@ namespace Spindel
 			{
 				throw new Exception(string.Format("More than one relationship was found between {0} and {1}.", parentId.ToString(), childId.ToString()));
 			}
+		}
+
+		private Page NextPageToCrawl()
+		{
+			var urls = File.ReadLines(URLS);
+			foreach (var urlLine in urls)
+			{
+				Page parent = DecodeLine(urlLine);
+				if (parent == null)
+				{
+					continue;
+				}
+				if (!File.ReadLines(RELATIONSHIPS).Any(l => l.Split('#')[0] == parent.Id.ToString()))
+				{
+					return parent;
+				}
+			}
+			return null;
 		}
 
 		public class Page
