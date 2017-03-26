@@ -12,6 +12,8 @@ namespace Spindel
 		private const string URLS = @"./urls.txt";
 		private const string RELATIONSHIPS = @"./relationships.txt";
 
+		private const char DELIMINATOR = '#';
+
         public static void Main(string[] args)
         {
 			File.AppendText(URLS).Dispose();
@@ -51,6 +53,7 @@ namespace Spindel
 			if (GetExistingUrlId(page.Url) == null)
 			{
 				var line = page.Id.ToString() + "#" + page.Url;
+				Console.WriteLine(string.Format("Inserting new page ID:{0} URL:{1}", page.Id, page.Url));
 				using (var writer = new StreamWriter(URLS, true))
 				{
 					writer.WriteLine(line);
@@ -63,6 +66,7 @@ namespace Spindel
 			if (!DoesRelationshipExist(parent.Id, child.Id))
 			{
 				var line = parent.Id.ToString() + "#" + child.Id.ToString();
+				Console.WriteLine(string.Format("Inserting new relationship PARENT:{0} CHILD:{1}", parent.Id, child.Id));
 				using (var writer = new StreamWriter(RELATIONSHIPS, true))
 				{
 					writer.WriteLine(line);
@@ -75,8 +79,8 @@ namespace Spindel
 			try
 			{
 				var page = new Page();
-				page.Id = int.Parse(line.Split('#')[0]);
-				page.Url = line.Split('#')[1];
+				page.Id = int.Parse(line.Split(DELIMINATOR)[0]);
+				page.Url = line.Split(DELIMINATOR)[1];
 				return page;
 			}
 			catch
@@ -111,7 +115,7 @@ namespace Spindel
 
 		private static Page GetPage(string url)
 		{
-			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
+			var lines = File.ReadLines(URLS).Where(l => l.Split(DELIMINATOR)[1] == url);
 			int count = 0;
 			string line = "";
 			foreach (var l in lines)
@@ -141,7 +145,9 @@ namespace Spindel
 				try
 				{
 					string lastLine = File.ReadLines(URLS).Last();
-					return int.Parse(lastLine.Split('#')[0]) + 1;
+					int newId = int.Parse(lastLine.Split(DELIMINATOR)[0]) + 1;
+					Console.WriteLine(string.Format("Next id to use is {0}", newId));
+					return newId;
 				}
 				catch
 				{
@@ -156,12 +162,12 @@ namespace Spindel
 
 		private static int? GetExistingUrlId(string url)
 		{
-			var lines = File.ReadLines(URLS).Where(l => l.Split('#')[1] == url);
+			var lines = File.ReadLines(URLS).Where(l => l.Split(DELIMINATOR)[1] == url);
 			int count = 0;
 			int? id = null;
 			foreach (var l in lines)
 			{
-				id = int.Parse(l.Split('#')[0]);
+				id = int.Parse(l.Split(DELIMINATOR)[0]);
 				count++;
 			}
 			if (count == 0)
@@ -170,6 +176,7 @@ namespace Spindel
 			}
 			else if (count == 1)
 			{
+				Console.WriteLine(string.Format("Found existing ID:{0} for URL:{1}", id, url));
 				return id;
 			}
 			else
@@ -180,7 +187,7 @@ namespace Spindel
 
 		private static bool DoesRelationshipExist(int parentId, int childId)
 		{
-			var lines = File.ReadLines(RELATIONSHIPS).Where(l => l.Split('#')[0] == parentId.ToString() && l.Split('#')[1] == childId.ToString());
+			var lines = File.ReadLines(RELATIONSHIPS).Where(l => l.Split(DELIMINATOR)[0] == parentId.ToString() && l.Split(DELIMINATOR)[1] == childId.ToString());
 			int count = 0;
 			foreach (var l in lines)
 			{
@@ -210,11 +217,13 @@ namespace Spindel
 				{
 					continue;
 				}
-				if (!File.ReadLines(RELATIONSHIPS).Any(l => l.Split('#')[0] == parent.Id.ToString()))
+				if (!File.ReadLines(RELATIONSHIPS).Any(l => l.Split(DELIMINATOR)[0] == parent.Id.ToString()))
 				{
+					Console.WriteLine(string.Format("Found next existing URL to crawl ID:{0} URL:{1}", parent.Id, parent.Url));
 					return parent;
 				}
 			}
+			Console.WriteLine("Failed to find a new parent URL to crawl.");
 			return null;
 		}
 
@@ -256,32 +265,40 @@ namespace Spindel
 				{
 					return;
 				}
-				HtmlDocument htmlDoc = new HtmlDocument();
-				htmlDoc.OptionFixNestedTags = true;
-				HttpWebRequest request = WebRequest.Create(Url) as HttpWebRequest;
-				request.Method = "GET";
-				request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
-				request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-				request.Headers.Add(HttpRequestHeader.AcceptLanguage, "en-us,en;q=0.5");
-				WebResponse response = request.GetResponse();
-				htmlDoc.Load(response.GetResponseStream(), true);
-				var links = new List<string>();
-				foreach (HtmlNode hrefs in htmlDoc.DocumentNode.SelectNodes("//a[@href]"))
+				try
 				{
-					HtmlAttribute att = hrefs.Attributes["href"];
-					foreach (var link in att.Value.Split(' '))
+					HtmlDocument htmlDoc = new HtmlDocument();
+					htmlDoc.OptionFixNestedTags = true;
+					HttpWebRequest request = WebRequest.Create(Url) as HttpWebRequest;
+					request.Method = "GET";
+					request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
+					request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+					request.Headers.Add(HttpRequestHeader.AcceptLanguage, "en-us,en;q=0.5");
+					WebResponse response = request.GetResponse();
+					htmlDoc.Load(response.GetResponseStream(), true);
+					var links = new List<string>();
+					foreach (HtmlNode hrefs in htmlDoc.DocumentNode.SelectNodes("//a[@href]"))
 					{
-						if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
+						HtmlAttribute att = hrefs.Attributes["href"];
+						foreach (var link in att.Value.Split(' '))
 						{
-							// Ensure links to this page aren't regestered as child links
-							if (link != Url)
+							if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
 							{
-								links.Add(link);
+								// Ensure links to this page aren't regestered as child links
+								if (link != Url)
+								{
+									links.Add(link);
+								}
 							}
 						}
 					}
+					Console.WriteLine(string.Format("Found {0} child URLs for ID:{1} URL:{2}", links.Count(), Id, Url));
+					ChildUrls = links;
 				}
-				ChildUrls = links;
+				catch
+				{
+					Console.WriteLine(string.Format("Error getting child links for ID:{0} URL:{1}", Id, Url));
+				}
 			}
 		}
     }
