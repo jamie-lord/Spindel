@@ -1,305 +1,105 @@
 ﻿using HtmlAgilityPack;
+using Spindel.Models;
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.IO;
+using System.Data.Entity;
+using System.Data.Entity.Migrations;
 using System.Linq;
+using System.Linq.Expressions;
+using System.Net;
 
 namespace Spindel
 {
     public class Program
     {
-		private const string URLS = @"./urls.txt";
-		private const string RELATIONSHIPS = @"./relationships.txt";
-
-		private const char DELIMINATOR = '#';
-
+        private static readonly SpindelContext db = new SpindelContext();
         public static void Main(string[] args)
         {
-			File.AppendText(URLS).Dispose();
-			File.AppendText(RELATIONSHIPS).Dispose();
-			var root = new Page("https://www.theguardian.com/uk");
-			ProcessPage(root);
-
-			var arePagesLeft = true;
-			while (arePagesLeft)
-			{
-				var nextParent = NextPageToCrawl();
-				if (nextParent == null)
-				{
-					arePagesLeft = false;
-					continue;
-				}
-				ProcessPage(nextParent);
-			}
+            var root = new Page() { Url = "https://www.theguardian.com/uk" };
+            CrawlPage(root);
+            Page nextPage;
+            do
+            {
+                nextPage = NextPageToCrawl();
+                if (nextPage != null)
+                {
+                    CrawlPage(nextPage);
+                }
+            } while (nextPage != null);
         }
 
-		private static void ProcessPage(Page page)
-		{
-			page.Id = GetExistingOrNewUrlId(page.Url);
-			InsertPage(page);
-			page.GetChildUrls();
-			foreach (var c in page.ChildUrls)
-			{
-				var child = new Page(c);
-				child.Id = GetExistingOrNewUrlId(child.Url);
-				InsertPage(child);
-				InsertRelationship(page, child);
-			}
-		}
+        private static void CrawlPage(Page parent)
+        {
+            parent = db.Pages.AddIfNotExists(parent, p => p.Url == parent.Url);
+            var chidren = GetChildUrls(parent.Url);
+            foreach (var url in chidren)
+            {
+                Page child = new Page() { Url = url };
+                child = db.Pages.AddIfNotExists(child, p => p.Url == child.Url);
+                db.Relationships.AddOrUpdate(new Relationship() { Parent = parent, Child = child });
+            }
+            parent.LastCrawl = DateTime.Now;
+            db.Pages.AddOrUpdate(parent);
+            db.SaveChanges();
+        }
 
-		private static void InsertPage(Page page)
-		{
-			if (GetExistingUrlId(page.Url) == null)
-			{
-				var line = page.Id.ToString() + "#" + page.Url;
-				Console.WriteLine(string.Format("Inserting new page ID:{0} URL:{1}", page.Id, page.Url));
-				using (var writer = new StreamWriter(URLS, true))
-				{
-					writer.WriteLine(line);
-				}
-			}
-		}
+        private static Page NextPageToCrawl()
+        {
+            return db.Pages.Where(p => p.LastCrawl == null).First();
+        }
 
-		private static void InsertRelationship(Page parent, Page child)
-		{
-			if (!DoesRelationshipExist(parent.Id, child.Id))
-			{
-				var line = parent.Id.ToString() + "#" + child.Id.ToString();
-				Console.WriteLine(string.Format("Inserting new relationship PARENT:{0} CHILD:{1}", parent.Id, child.Id));
-				using (var writer = new StreamWriter(RELATIONSHIPS, true))
-				{
-					writer.WriteLine(line);
-				}
-			}
-		}
+        public static List<string> GetChildUrls(string url)
+        {
+            try
+            {
+                HtmlDocument htmlDoc = new HtmlDocument();
+                htmlDoc.OptionFixNestedTags = true;
+                HttpWebRequest request = WebRequest.Create(url) as HttpWebRequest;
+                request.Method = "GET";
+                request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
+                request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+                request.Headers.Add(HttpRequestHeader.AcceptLanguage, "en-us,en;q=0.5");
+                WebResponse response = request.GetResponse();
+                htmlDoc.Load(response.GetResponseStream(), true);
+                var links = new List<string>();
+                foreach (HtmlNode hrefs in htmlDoc.DocumentNode.SelectNodes("//a[@href]"))
+                {
+                    HtmlAttribute att = hrefs.Attributes["href"];
+                    foreach (var link in att.Value.Split(' '))
+                    {
+                        if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
+                        {
+                            // Ensure links to this page aren't registered as child links
+                            if (link != url)
+                            {
+                                links.Add(link);
+                            }
+                        }
+                    }
+                }
+                Console.WriteLine(string.Format("Found {0} child URLs for URL:{1}", links.Count(), url));
+                return links;
+            }
+            catch
+            {
+                Console.WriteLine(string.Format("Error getting child links for URL:{0}", url));
+                return null;
+            }
+        }
+    }
 
-		private static Page DecodeLine(string line)
-		{
-			try
-			{
-				var page = new Page();
-				page.Id = int.Parse(line.Split(DELIMINATOR)[0]);
-				page.Url = line.Split(DELIMINATOR)[1];
-				return page;
-			}
-			catch
-			{
-				return null;
-			}
-		}
+    public static class DbSetExtensions
+    {
+        public static T AddIfNotExists<T>(this DbSet<T> dbSet, T entity, Expression<Func<T, bool>> predicate = null) where T : class, new()
+        {
+            var exists = predicate != null ? dbSet.Any(predicate) : dbSet.Any();
+            return !exists ? dbSet.Add(entity) : dbSet.Where(predicate).First();
+        }
+    }
 
-		private static Page GetPage(int id)
-		{
-			var lines = File.ReadLines(URLS).Where(l => l.StartsWith(id.ToString() + "#", StringComparison.Ordinal));
-			int count = 0;
-			string line = "";
-			foreach (var l in lines)
-			{
-				line = l;
-				count++;
-			}
-			if (count == 1)
-			{
-				return DecodeLine(line);
-			}
-			else if (count == 0)
-			{
-				throw new Exception(string.Format("No line with ID {0} was found.", id.ToString()));
-			}
-			else
-			{
-				throw new Exception(string.Format("More than one line with ID {0} was found.", id.ToString()));
-			}
-		}
-
-		private static Page GetPage(string url)
-		{
-			var lines = File.ReadLines(URLS).Where(l => l.Split(DELIMINATOR)[1] == url);
-			int count = 0;
-			string line = "";
-			foreach (var l in lines)
-			{
-				line = l;
-				count++;
-			}
-			if (count == 1)
-			{
-				return DecodeLine(line);
-			}
-			else if (count == 0)
-			{
-				return null;
-			}
-			else
-			{
-				throw new Exception(string.Format("More than one matching URL {0} was found.", url));
-			}
-		}
-
-		private static int GetExistingOrNewUrlId(string url)
-		{
-			var id = GetExistingUrlId(url);
-			if (id == null)
-			{
-				try
-				{
-					string lastLine = File.ReadLines(URLS).Last();
-					int newId = int.Parse(lastLine.Split(DELIMINATOR)[0]) + 1;
-					Console.WriteLine(string.Format("Next id to use is {0}", newId));
-					return newId;
-				}
-				catch
-				{
-					return 0;
-				}
-			}
-			else
-			{
-				return id.Value;
-			}
-		}
-
-		private static int? GetExistingUrlId(string url)
-		{
-			var lines = File.ReadLines(URLS).Where(l => l.Split(DELIMINATOR)[1] == url);
-			int count = 0;
-			int? id = null;
-			foreach (var l in lines)
-			{
-				id = int.Parse(l.Split(DELIMINATOR)[0]);
-				count++;
-			}
-			if (count == 0)
-			{
-				return null;
-			}
-			else if (count == 1)
-			{
-				Console.WriteLine(string.Format("Found existing ID:{0} for URL:{1}", id, url));
-				return id;
-			}
-			else
-			{
-				throw new Exception(string.Format("More than one matching URL {0} was found.", url));
-			}
-		}
-
-		private static bool DoesRelationshipExist(int parentId, int childId)
-		{
-			var lines = File.ReadLines(RELATIONSHIPS).Where(l => l.Split(DELIMINATOR)[0] == parentId.ToString() && l.Split(DELIMINATOR)[1] == childId.ToString());
-			int count = 0;
-			foreach (var l in lines)
-			{
-				count++;
-			}
-			if (count == 0)
-			{
-				return false;
-			}
-			else if (count == 1)
-			{
-				return true;
-			}
-			else
-			{
-				throw new Exception(string.Format("More than one relationship was found between {0} and {1}.", parentId.ToString(), childId.ToString()));
-			}
-		}
-
-		private static Page NextPageToCrawl()
-		{
-			var urls = File.ReadLines(URLS);
-			foreach (var urlLine in urls)
-			{
-				Page parent = DecodeLine(urlLine);
-				if (parent == null)
-				{
-					continue;
-				}
-				if (!File.ReadLines(RELATIONSHIPS).Any(l => l.Split(DELIMINATOR)[0] == parent.Id.ToString()))
-				{
-					Console.WriteLine(string.Format("Found next existing URL to crawl ID:{0} URL:{1}", parent.Id, parent.Url));
-					return parent;
-				}
-			}
-			Console.WriteLine("Failed to find a new parent URL to crawl.");
-			return null;
-		}
-
-		public class Page
-		{
-			public Page()
-			{
-			}
-
-			public Page(string url)
-			{
-				Url = url;
-			}
-
-			public string Url { get; set; }
-
-			public int Id { get; set; }
-
-			private List<string> _childUrls;
-			public List<string> ChildUrls
-			{
-				get
-				{
-					if (_childUrls == null)
-					{
-						_childUrls = new List<string>();
-					}
-					return _childUrls;
-				}
-				private set
-				{
-					_childUrls = value;
-				}
-			}
-
-			public void GetChildUrls()
-			{
-				if (Url == null)
-				{
-					return;
-				}
-				try
-				{
-					HtmlDocument htmlDoc = new HtmlDocument();
-					htmlDoc.OptionFixNestedTags = true;
-					HttpWebRequest request = WebRequest.Create(Url) as HttpWebRequest;
-					request.Method = "GET";
-					request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
-					request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-					request.Headers.Add(HttpRequestHeader.AcceptLanguage, "en-us,en;q=0.5");
-					WebResponse response = request.GetResponse();
-					htmlDoc.Load(response.GetResponseStream(), true);
-					var links = new List<string>();
-					foreach (HtmlNode hrefs in htmlDoc.DocumentNode.SelectNodes("//a[@href]"))
-					{
-						HtmlAttribute att = hrefs.Attributes["href"];
-						foreach (var link in att.Value.Split(' '))
-						{
-							if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
-							{
-								// Ensure links to this page aren't regestered as child links
-								if (link != Url)
-								{
-									links.Add(link);
-								}
-							}
-						}
-					}
-					Console.WriteLine(string.Format("Found {0} child URLs for ID:{1} URL:{2}", links.Count(), Id, Url));
-					ChildUrls = links;
-				}
-				catch
-				{
-					Console.WriteLine(string.Format("Error getting child links for ID:{0} URL:{1}", Id, Url));
-				}
-			}
-		}
+    public class SpindelContext : DbContext
+    {
+        public DbSet<Page> Pages { get; set; }
+        public DbSet<Relationship> Relationships { get; set; }
     }
 }
