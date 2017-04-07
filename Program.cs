@@ -1,105 +1,131 @@
-﻿using HtmlAgilityPack;
+﻿using Abot.Crawler;
+using Abot.Poco;
+using NanoApi;
 using Spindel.Models;
 using System;
-using System.Collections.Generic;
-using System.Data.Entity;
-using System.Data.Entity.Migrations;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Net;
+using System.Text;
 
 namespace Spindel
 {
     public class Program
     {
-        private static readonly SpindelContext db = new SpindelContext();
+        private static PageConcurrentBag _pages = new PageConcurrentBag();
+        private static RelationshipConcurrentBag _relationships = new RelationshipConcurrentBag();
         public static void Main(string[] args)
         {
-            var root = new Page() { Url = "https://www.theguardian.com/uk" };
-            CrawlPage(root);
-            Page nextPage;
-            do
+            PoliteWebCrawler crawler = new PoliteWebCrawler();
+            crawler.PageCrawlCompletedAsync += Crawler_ProcessPageCrawlCompleted;
+            var start = DateTime.Now;
+            var uri = new Uri("https://lord.technology");
+            var startString = DateTime.UtcNow.ToString("o");
+            foreach (var c in Path.GetInvalidFileNameChars()) { startString = startString.Replace(c, '-'); }
+            CrawlResult result = crawler.Crawl(uri);
+            if (result.ErrorOccurred)
             {
-                nextPage = NextPageToCrawl();
-                if (nextPage != null)
-                {
-                    CrawlPage(nextPage);
-                }
-            } while (nextPage != null);
-        }
-
-        private static void CrawlPage(Page parent)
-        {
-            parent = db.Pages.AddIfNotExists(parent, p => p.Url == parent.Url);
-            var chidren = GetChildUrls(parent.Url);
-            foreach (var url in chidren)
-            {
-                Page child = new Page() { Url = url };
-                child = db.Pages.AddIfNotExists(child, p => p.Url == child.Url);
-                db.Relationships.AddOrUpdate(new Relationship() { Parent = parent, Child = child });
+                Console.WriteLine("Crawl of {0} completed with error: {1}", result.RootUri.AbsoluteUri, result.ErrorException.Message);
             }
-            parent.LastCrawl = DateTime.Now;
-            db.Pages.AddOrUpdate(parent);
-            db.SaveChanges();
-        }
-
-        private static Page NextPageToCrawl()
-        {
-            return db.Pages.Where(p => p.LastCrawl == null).First();
-        }
-
-        public static List<string> GetChildUrls(string url)
-        {
-            try
+            else
             {
-                HtmlDocument htmlDoc = new HtmlDocument();
-                htmlDoc.OptionFixNestedTags = true;
-                HttpWebRequest request = WebRequest.Create(url) as HttpWebRequest;
-                request.Method = "GET";
-                request.UserAgent = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0";
-                request.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-                request.Headers.Add(HttpRequestHeader.AcceptLanguage, "en-us,en;q=0.5");
-                WebResponse response = request.GetResponse();
-                htmlDoc.Load(response.GetResponseStream(), true);
-                var links = new List<string>();
-                foreach (HtmlNode hrefs in htmlDoc.DocumentNode.SelectNodes("//a[@href]"))
+                Console.WriteLine("Crawl of {0} completed without error.", result.RootUri.AbsoluteUri);
+            }
+            var finish = DateTime.Now;
+            Console.WriteLine((finish - start).TotalMinutes);
+
+            var pagesDb = JsonFile<Page>.GetInstance(".\\", string.Format("{0}_pages.json", startString), Encoding.UTF8);
+            pagesDb.Insert(_pages.ToList());
+            var relationshipsDb = JsonFile<Relationship>.GetInstance(".\\", string.Format("{0}_relationships.json", startString), Encoding.UTF8);
+            relationshipsDb.Insert(_relationships.ToList());
+        }
+
+        private static void Crawler_ProcessPageCrawlCompleted(object sender, PageCrawlCompletedArgs e)
+        {
+            CrawledPage crawledPage = e.CrawledPage;
+
+            if (crawledPage.WebException != null || crawledPage.HttpWebResponse.StatusCode != HttpStatusCode.OK)
+            {
+                Console.WriteLine("Crawl of page failed {0}", crawledPage.Uri.AbsoluteUri);
+            }
+            else
+            {
+                if (string.IsNullOrEmpty(crawledPage.Content.Text))
                 {
-                    HtmlAttribute att = hrefs.Attributes["href"];
-                    foreach (var link in att.Value.Split(' '))
+                    Console.WriteLine("Crawl of page succeeded {0} but no content was found.", crawledPage.Uri.AbsoluteUri);
+                    return;
+                }
+
+                Console.WriteLine("Crawl of page succeeded {0}", crawledPage.Uri.AbsoluteUri);
+
+                Page parent = _pages.Add(new Page() { Uri = crawledPage.Uri.AbsoluteUri, LastCrawl = crawledPage.RequestCompleted });
+                foreach (var uri in crawledPage.ParsedLinks)
+                {
+                    if (crawledPage.Uri.AbsoluteUri == uri.AbsoluteUri)
                     {
-                        if (link.StartsWith("http", StringComparison.Ordinal) && !links.Contains(link))
-                        {
-                            // Ensure links to this page aren't registered as child links
-                            if (link != url)
-                            {
-                                links.Add(link);
-                            }
-                        }
+                        continue;
                     }
+                    var child = _pages.Add(new Page() { Uri = uri.AbsoluteUri });
+                    _relationships.Add(new Relationship() { Parent = parent.Id, Child = child.Id });
                 }
-                Console.WriteLine(string.Format("Found {0} child URLs for URL:{1}", links.Count(), url));
-                return links;
-            }
-            catch
-            {
-                Console.WriteLine(string.Format("Error getting child links for URL:{0}", url));
-                return null;
             }
         }
     }
 
-    public static class DbSetExtensions
+    public class PageConcurrentBag : ConcurrentBag<Page>
     {
-        public static T AddIfNotExists<T>(this DbSet<T> dbSet, T entity, Expression<Func<T, bool>> predicate = null) where T : class, new()
+        private int _nextId = 1;
+        public int NextId
         {
-            var exists = predicate != null ? dbSet.Any(predicate) : dbSet.Any();
-            return !exists ? dbSet.Add(entity) : dbSet.Where(predicate).First();
+            get
+            {
+                var r = _nextId;
+                _nextId++;
+                return r;
+            }
+        }
+        public new Page Add(Page item)
+        {
+            var existingItem = this.Where(p => p.Uri == item.Uri).FirstOrDefault();
+            if (existingItem != null)
+            {
+                item = existingItem;
+            }
+            else
+            {
+                item.Id = NextId;
+                base.Add(item);
+            }
+            return item;
         }
     }
 
-    public class SpindelContext : DbContext
+    public class RelationshipConcurrentBag : ConcurrentBag<Relationship>
     {
-        public DbSet<Page> Pages { get; set; }
-        public DbSet<Relationship> Relationships { get; set; }
+        private int _nextId = 1;
+        public int NextId
+        {
+            get
+            {
+                var r = _nextId;
+                _nextId++;
+                return r;
+            }
+        }
+        public new Relationship Add(Relationship item)
+        {
+            var existingItem = this.Where(r => r.Parent == item.Parent && r.Child == item.Child).FirstOrDefault();
+            if (existingItem != null)
+            {
+                item = existingItem;
+            }
+            else
+            {
+                item.Id = NextId;
+                base.Add(item);
+            }
+            return item;
+        }
     }
 }

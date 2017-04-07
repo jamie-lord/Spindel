@@ -1,15 +1,12 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using NanoApi.JsonFile;
 
 namespace Spindel.Models
 {
     public class Relationship
     {
+        [PrimaryKey]
         public int Id { get; set; }
-        [Key]
-        [Required]
-        public Page Parent { get; set; }
-        [Key]
-        [Required]
-        public Page Child { get; set; }
+        public int Parent { get; set; }
+        public int Child { get; set; }
     }
 }
