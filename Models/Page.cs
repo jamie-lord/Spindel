@@ -1,13 +1,14 @@
-﻿using NanoApi.JsonFile;
-using System;
+﻿using System;
 
 namespace Spindel.Models
 {
-    public class Page
-    {
-        [PrimaryKey]
-        public int Id { get; set; }
-        public string Uri { get; set; }
-        public DateTime? LastCrawl { get; set; }
-    }
+	public class Page
+	{
+		public string id { get; set; }
+		public string label { get; set; }
+		public DateTime? lastCrawl { get; set; }
+		public int x = 0;
+		public int y = 0;
+		public int size = 2;
+	}
 }
